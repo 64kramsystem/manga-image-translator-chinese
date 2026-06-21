@@ -79,6 +79,7 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
         translator.cast_notes = open(cast_path).read().strip() or None
     else:
         translator.cast_notes = seed.strip() or None
+    translator.session_id = None   # one fresh claude conversation per volume
 
     for i, fn in enumerate(pages, 1):
         out_png = os.path.join(rendered, f"{os.path.splitext(fn)[0]}.png")
