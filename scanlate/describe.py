@@ -27,6 +27,11 @@ from PIL import Image
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 TIMEOUT = int(os.environ.get("SCANLATE_DESC_TIMEOUT", "300"))
 CLAUDE_BIN = shutil.which("claude") or "claude"
+# qwen runs at a fixed context; set it explicitly rather than trust Ollama's default.
+NUM_CTX = int(os.environ.get("SCANLATE_DESC_NUM_CTX", "32768"))
+# Recent page descriptions kept in the qwen conversation. The system/cast message is
+# always kept; older descriptions are dropped (identity continuity rides on the cast).
+KEEP_PAGES = int(os.environ.get("SCANLATE_DESC_KEEP_PAGES", "40"))
 
 ROLE = (
     "You are describing a Hong Kong manhua page by page to give a translator context. Use the "
@@ -77,7 +82,7 @@ class Describer:
     # ---- qwen: Ollama, client-side history (prior pages kept as text, current page as image) ----
     def _ollama(self, messages):
         req = {"model": self.model or "qwen3.6:35b-a3b", "stream": False, "think": False,
-               "messages": messages}
+               "options": {"num_ctx": NUM_CTX}, "messages": messages}
         r = urllib.request.urlopen(urllib.request.Request(
             OLLAMA + "/api/chat", data=json.dumps(req).encode(),
             headers={"Content-Type": "application/json"}), timeout=600)
@@ -88,9 +93,12 @@ class Describer:
             self.history = [{"role": "system", "content": ROLE + _cast_block(self.cast_seed)}]
         scene = self._ollama(self.history + [{"role": "user", "content": PAGE_ASK,
                                               "images": [_b64(image_path)]}])
-        # Keep history text-only (drop the image) so the payload stays bounded volume-wide.
+        # Keep history text-only (drop the image), and keep only the recent window of
+        # descriptions beyond the system/cast message — old pages are safe to lose.
         self.history += [{"role": "user", "content": PAGE_ASK},
                          {"role": "assistant", "content": scene}]
+        if len(self.history) > 1 + 2 * KEEP_PAGES:
+            self.history = self.history[:1] + self.history[-2 * KEEP_PAGES:]
         return scene
 
     def _c_qwen(self):
