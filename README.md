@@ -23,8 +23,8 @@ scanlate/run.py OUT/ vol1.cbz vol2.epub --target-lang ENG --quality 55
 ```
 
 Optionally a per-page **scene description** is generated and fed to the translator as context
-(`--describe claude|codex|qwen|none`, default `claude`; `codex` uses the `codex` CLI, `qwen` a
-local Ollama vision model). It is computed only for pages that have text to translate.
+(`--describe qwen|claude|codex|none`, default `qwen` — the local `qwen3.6:35b-a3b` MoE, fast and
+free; `claude`/`codex` use those CLIs). It is computed only for pages that have text to translate.
 
 The describe pass also maintains a **running cast list** for the volume (`work/<stem>/cast.txt`):
 each page, the same vision call updates a short roster of recurring characters (name, gender, a

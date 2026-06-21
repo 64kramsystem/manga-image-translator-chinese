@@ -115,10 +115,11 @@ async def main(a):
     cfg = build_config(a.target_lang)
     translator = get_translator(Translator.claude_cli)  # shared cached instance
     seed = open(a.notes).read() if a.notes else ""
+    describe_model = a.describe_model or ("qwen3.6:35b-a3b" if a.describe == "qwen" else None)
     os.makedirs(a.out_dir, exist_ok=True)
     for vol in a.volumes:
         await scanlate_volume(mt, cfg, vol, a.work_dir, a.out_dir, a.quality,
-                              translator, a.describe, a.describe_model, seed)
+                              translator, a.describe, describe_model, seed)
 
 
 if __name__ == "__main__":
@@ -130,8 +131,8 @@ if __name__ == "__main__":
     ap.add_argument("--quality", type=int, default=55, help="JP2 quality (ImageMagick scale)")
     ap.add_argument("--work-dir", default="scanlate_work")
     ap.add_argument("--model-dir", default=None, help="reuse an existing MIT models/ dir")
-    ap.add_argument("--describe", choices=["none", "claude", "codex", "qwen"], default="claude",
-                    help="scene-description backend fed to the translator as context")
+    ap.add_argument("--describe", choices=["none", "claude", "codex", "qwen"], default="qwen",
+                    help="scene-description backend fed to the translator as context (default: qwen MoE)")
     ap.add_argument("--describe-model", default=None, help="model for the describe backend")
     ap.add_argument("--notes", default=None,
                     help="seed file of recurring-character facts; the describe pass extends it per page")
