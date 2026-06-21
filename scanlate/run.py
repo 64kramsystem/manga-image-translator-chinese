@@ -55,7 +55,7 @@ def build_config(target_lang):
 
 
 async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
-                          translator, describe_backend, describe_model):
+                          translator, describe_backend, describe_model, notes):
     stem = os.path.splitext(os.path.basename(volume.rstrip("/")))[0]
     pages_dir = os.path.join(work_dir, stem, "pages")
     rendered = os.path.join(work_dir, stem, "rendered")
@@ -76,7 +76,7 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
         page_path = os.path.join(pages_dir, fn)
         if describe_backend != "none":
             translator.scene_provider = functools.partial(describe, page_path,
-                                                          describe_backend, describe_model)
+                                                          describe_backend, describe_model, notes)
         ctx = await mt.translate(Image.open(page_path).convert("RGB"), cfg, skip_context_save=True)
         ctx.result.save(out_png)
         if translator.last_description:
@@ -98,10 +98,12 @@ async def main(a):
     mt = MangaTranslator(params)
     cfg = build_config(a.target_lang)
     translator = get_translator(Translator.claude_cli)  # shared cached instance
+    notes = open(a.notes).read() if a.notes else ""
+    translator.cast_notes = notes or None
     os.makedirs(a.out_dir, exist_ok=True)
     for vol in a.volumes:
         await scanlate_volume(mt, cfg, vol, a.work_dir, a.out_dir, a.quality,
-                              translator, a.describe, a.describe_model)
+                              translator, a.describe, a.describe_model, notes)
 
 
 if __name__ == "__main__":
@@ -116,4 +118,6 @@ if __name__ == "__main__":
     ap.add_argument("--describe", choices=["none", "claude", "codex", "qwen"], default="claude",
                     help="scene-description backend fed to the translator as context")
     ap.add_argument("--describe-model", default=None, help="model for the describe backend")
+    ap.add_argument("--notes", default=None,
+                    help="text file of recurring-character facts, fed to both stages as context")
     asyncio.run(main(ap.parse_args()))
