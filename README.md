@@ -26,9 +26,12 @@ Optionally a per-page **scene description** is generated and fed to the translat
 (`--describe claude|codex|qwen|none`, default `claude`; `codex` uses the `codex` CLI, `qwen` a
 local Ollama vision model). It is computed only for pages that have text to translate.
 
-`--notes FILE` passes a small text file of recurring-character facts (e.g. *"Ah-Chung is male,
-long hair"*) to **both** stages, so per-page processing — which has no memory of other pages —
-keeps genders, identities and pronouns consistent across the volume.
+The describe pass also maintains a **running cast list** for the volume (`work/<stem>/cast.txt`):
+each page, the same vision call updates a short roster of recurring characters (name, gender, a
+distinguishing detail), which is fed back into both stages so genders and pronouns stay consistent
+even though pages are processed independently — no extra pass. `--notes FILE` seeds it with facts
+you already know (e.g. *"Ah-Chung is male, long hair"*); the pass extends and corrects it as
+clearer pages appear.
 
 Detection, OCR (48px), inpainting (lama_large) and English typesetting (manga2eng) are the
 upstream defaults; `run.py` wires them to the `claude_cli` translator.

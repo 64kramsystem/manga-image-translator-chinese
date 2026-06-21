@@ -1,8 +1,11 @@
 """Scene-description backends for translation context.
 
-Given a comic page image, returns a short prose description (characters + apparent
-gender, who speaks to whom, tone, key on-panel action) to feed a translator as
-context. Three backends:
+Given a comic page image and the running cast list so far, a backend returns two
+things: a short prose SCENE description for the current page (characters + apparent
+gender, who speaks to whom, tone, key on-panel action) and an updated CAST list of
+the book's recurring characters — so a character whose gender is ambiguous on one
+page gets pinned down once a clearer page appears. Both feed the translator; the cast
+also carries forward to the next page (no separate pass). Three backends:
 
   claude  — `claude -p`, reads the image path via its file tool (Claude subscription)
   codex   — `codex exec -i IMG -o OUT` (ChatGPT/Codex subscription)
@@ -15,6 +18,7 @@ import base64
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import urllib.request
@@ -22,10 +26,18 @@ import urllib.request
 from PIL import Image
 
 PROMPT = (
-    "Describe this comic page to give a translator context — one short paragraph. Cover: the "
-    "characters present and each one's apparent gender; for each speech bubble, who is speaking "
-    "and to whom; the emotional tone; and any key on-panel action or object the dialogue might "
-    "refer to. Do NOT translate — describe."
+    "You are building translation context for ONE page of a comic. Produce TWO sections, each "
+    "introduced by its exact header on its own line.\n\n"
+    "SCENE:\n"
+    "One short paragraph describing this page for a translator — the characters present and each "
+    "one's apparent gender, who speaks to whom in each speech bubble, the emotional tone, and any "
+    "key on-panel action or object the dialogue might refer to. Do NOT translate.\n\n"
+    "CAST:\n"
+    "The book's running list of recurring, identifiable characters, one per line as "
+    "`Name or description — gender — one distinguishing detail`. Start from the existing list "
+    "below; ADD any recurring character you can identify on this page, and if this page makes an "
+    "earlier entry clearer (e.g. a character whose gender looked ambiguous), CORRECT that line. "
+    "Omit one-off background figures. If nothing changes, repeat the list unchanged."
 )
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 TIMEOUT = int(os.environ.get("SCANLATE_DESC_TIMEOUT", "300"))
@@ -71,9 +83,27 @@ def _qwen(image_path, model, prompt):
 BACKENDS = {"claude": _claude, "codex": _codex, "qwen": _qwen}
 
 
-def describe(image_path, backend, model=None, notes=""):
-    prompt = PROMPT
-    if notes:
-        prompt += ("\n\nKnown facts about recurring characters (use to disambiguate gender, "
-                   "identity and relationships):\n" + notes.strip())
-    return BACKENDS[backend](image_path, model, prompt)
+def describe(image_path, backend, model=None, cast=""):
+    """Return (scene_description, updated_cast) for one page, given the cast so far."""
+    seed = cast.strip() if cast and cast.strip() else "(none identified yet)"
+    prompt = PROMPT + "\n\nExisting cast list so far:\n" + seed
+    raw = BACKENDS[backend](image_path, model, prompt)
+    return _split(raw, (cast or "").strip())
+
+
+def _split(raw, prev_cast):
+    """Split a labelled reply into (scene, updated_cast). If the CAST header is missing, keep the
+    previous cast; a leading SCENE header is stripped from the description."""
+    raw = (raw or "").strip()
+    m = re.search(r"(?im)^[\s>*#-]*cast\s*:", raw) or re.search(r"(?i)\bcast\s*:", raw)
+    if not m:
+        return _scene(raw), prev_cast
+    return _scene(raw[:m.start()]), (_clean(raw[m.end():]) or prev_cast)
+
+
+def _scene(s):
+    return _clean(re.sub(r"(?is)^[\s>*#-]*scene\s*:", "", s.strip()))
+
+
+def _clean(s):
+    return s.strip().strip("*#").strip()

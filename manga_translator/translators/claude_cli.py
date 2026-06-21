@@ -42,8 +42,10 @@ class ClaudeCliTranslator(CommonTranslator):
         # before each page. Called only here, so pages without text cost nothing.
         self.scene_provider = None
         self.last_description = None
-        # Optional series-wide cast notes (set once by the driver), prepended to
-        # every page's prompt to keep pronouns/identities consistent across pages.
+        # Running cast notes: recurring-character facts kept consistent across pages.
+        # The driver seeds this; the describe pass then refreshes it each page (its
+        # provider returns (scene_description, updated_cast)). Prepended to every
+        # page's prompt so pronouns/identities stay consistent volume-wide.
         self.cast_notes = None
 
     async def _translate(self, from_lang: str, to_lang: str, queries: List[str]) -> List[str]:
@@ -55,9 +57,12 @@ class ClaudeCliTranslator(CommonTranslator):
         if self.scene_provider is not None:
             provider, self.scene_provider = self.scene_provider, None
             try:
-                self.last_description = provider()
+                self.last_description, new_cast = provider()
             except Exception as e:
                 self.logger.warning(f"scene description failed: {e}")
+                new_cast = None
+            if new_cast:
+                self.cast_notes = new_cast
             if self.last_description:
                 context = ("Scene context for this page (for disambiguation — speaker gender, "
                            "who is addressed, tone):\n" + self.last_description.strip() + "\n\n")

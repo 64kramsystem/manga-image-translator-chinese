@@ -12,7 +12,9 @@ Run under MIT's venv with `img2pdf` installed and ImageMagick on PATH.
   scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--describe claude|codex|qwen|none] [--quality 55]
 
 Stage 1 is an optional scene description (--describe backend) fed to the translator
-as context; stage 2 is the claude_cli translation.
+as context; the same pass maintains a running per-volume cast list (work/<stem>/cast.txt,
+seeded by --notes) so character genders/pronouns stay consistent. Stage 2 is the
+claude_cli translation.
 """
 import argparse
 import asyncio
@@ -55,7 +57,7 @@ def build_config(target_lang):
 
 
 async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
-                          translator, describe_backend, describe_model, notes):
+                          translator, describe_backend, describe_model, seed):
     stem = os.path.splitext(os.path.basename(volume.rstrip("/")))[0]
     pages_dir = os.path.join(work_dir, stem, "pages")
     rendered = os.path.join(work_dir, stem, "rendered")
@@ -69,19 +71,32 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
 
     pages = sorted(f for f in os.listdir(pages_dir) if f.lower().endswith(IMG_EXT))
     print(f"[{stem}] {len(pages)} pages")
+
+    # Running cast notes: resume from the on-disk state if present, else from the seed.
+    # The describe pass extends them page by page (see describe() -> updated_cast).
+    cast_path = os.path.join(work_dir, stem, "cast.txt")
+    if os.path.exists(cast_path):
+        translator.cast_notes = open(cast_path).read().strip() or None
+    else:
+        translator.cast_notes = seed.strip() or None
+
     for i, fn in enumerate(pages, 1):
         out_png = os.path.join(rendered, f"{os.path.splitext(fn)[0]}.png")
         if os.path.exists(out_png):
             continue
         page_path = os.path.join(pages_dir, fn)
         if describe_backend != "none":
-            translator.scene_provider = functools.partial(describe, page_path,
-                                                          describe_backend, describe_model, notes)
+            translator.scene_provider = functools.partial(
+                describe, page_path, describe_backend, describe_model,
+                translator.cast_notes or "")
         ctx = await mt.translate(Image.open(page_path).convert("RGB"), cfg, skip_context_save=True)
         ctx.result.save(out_png)
         if translator.last_description:
             with open(os.path.join(rendered, f"{os.path.splitext(fn)[0]}.desc.txt"), "w") as f:
                 f.write(translator.last_description + "\n")
+        if describe_backend != "none" and translator.cast_notes:
+            with open(cast_path, "w") as f:
+                f.write(translator.cast_notes.strip() + "\n")
         print(f"[{stem}] {i}/{len(pages)}  ({len(ctx.text_regions or [])} regions)")
 
     out_pdf = os.path.join(out_dir, f"{stem}.pdf")
@@ -98,12 +113,11 @@ async def main(a):
     mt = MangaTranslator(params)
     cfg = build_config(a.target_lang)
     translator = get_translator(Translator.claude_cli)  # shared cached instance
-    notes = open(a.notes).read() if a.notes else ""
-    translator.cast_notes = notes or None
+    seed = open(a.notes).read() if a.notes else ""
     os.makedirs(a.out_dir, exist_ok=True)
     for vol in a.volumes:
         await scanlate_volume(mt, cfg, vol, a.work_dir, a.out_dir, a.quality,
-                              translator, a.describe, a.describe_model, notes)
+                              translator, a.describe, a.describe_model, seed)
 
 
 if __name__ == "__main__":
@@ -119,5 +133,5 @@ if __name__ == "__main__":
                     help="scene-description backend fed to the translator as context")
     ap.add_argument("--describe-model", default=None, help="model for the describe backend")
     ap.add_argument("--notes", default=None,
-                    help="text file of recurring-character facts, fed to both stages as context")
+                    help="seed file of recurring-character facts; the describe pass extends it per page")
     asyncio.run(main(ap.parse_args()))
