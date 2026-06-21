@@ -86,7 +86,9 @@ class ClaudeCliTranslator(CommonTranslator):
         return result
 
     def _call_claude(self, prompt: str) -> str:
-        cmd = [CLAUDE_BIN]
+        # --setting-sources "" loads no CLAUDE.md/settings, so the user's global memory
+        # never enters the translation; OAuth subscription auth is unaffected.
+        cmd = [CLAUDE_BIN, "--setting-sources", ""]
         if self.model:
             cmd += ["--model", self.model]
         cmd += ["-p", prompt]

@@ -44,7 +44,9 @@ TIMEOUT = int(os.environ.get("SCANLATE_DESC_TIMEOUT", "300"))
 
 
 def _claude(image_path, model, prompt):
-    cmd = ["claude"] + (["--model", model] if model else [])
+    # --setting-sources "" keeps the user's global CLAUDE.md/settings out of the call
+    # (OAuth subscription auth and the Read tool still work).
+    cmd = ["claude", "--setting-sources", ""] + (["--model", model] if model else [])
     cmd += ["-p", f"{prompt}\n\nThe comic page image is the file at: {image_path}"]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
     if p.returncode != 0:
