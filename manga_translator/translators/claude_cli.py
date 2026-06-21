@@ -38,12 +38,27 @@ class ClaudeCliTranslator(CommonTranslator):
         super().__init__()
         self.model = os.environ.get("SCANLATE_CLAUDE_MODEL") or None
         self.timeout = int(os.environ.get("SCANLATE_CLAUDE_TIMEOUT", "240"))
+        # Optional per-page scene description: a no-arg callable the driver sets
+        # before each page. Called only here, so pages without text cost nothing.
+        self.scene_provider = None
+        self.last_description = None
 
     async def _translate(self, from_lang: str, to_lang: str, queries: List[str]) -> List[str]:
         # to_lang arrives as the readable name (e.g. "English") via _LANGUAGE_CODE_MAP.
         if not queries:
             return []
-        prompt = PROMPT.format(tgt=to_lang) + "\n".join(
+        context = ""
+        self.last_description = None
+        if self.scene_provider is not None:
+            provider, self.scene_provider = self.scene_provider, None
+            try:
+                self.last_description = provider()
+            except Exception as e:
+                self.logger.warning(f"scene description failed: {e}")
+            if self.last_description:
+                context = ("Scene context for this page (for disambiguation — speaker gender, "
+                           "who is addressed, tone):\n" + self.last_description.strip() + "\n\n")
+        prompt = PROMPT.format(tgt=to_lang) + context + "\n".join(
             f"{i + 1}. {q}" for i, q in enumerate(queries)
         )
         out = self._call_claude(prompt)

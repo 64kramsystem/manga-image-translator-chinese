@@ -9,10 +9,14 @@ rendered output already exists are skipped, so an interrupted run resumes cheapl
 
 Run under MIT's venv with `img2pdf` installed and ImageMagick on PATH.
 
-  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--target-lang ENG] [--model NAME] [--quality 55]
+  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--describe claude|codex|qwen|none] [--quality 55]
+
+Stage 1 is an optional scene description (--describe backend) fed to the translator
+as context; stage 2 is the claude_cli translation.
 """
 import argparse
 import asyncio
+import functools
 import os
 import sys
 
@@ -28,8 +32,10 @@ from manga_translator.config import (  # noqa: E402
     RenderConfig, TranslatorConfig, DetectorConfig, OcrConfig, InpainterConfig,
     Renderer, Translator, Ocr, Detector, Inpainter,
 )
+from manga_translator.translators import get_translator  # noqa: E402
 from extract import extract, IMG_EXT  # noqa: E402
 from to_pdf import build_pdf  # noqa: E402
+from describe import describe  # noqa: E402
 
 FONT = os.path.join(REPO, "fonts", "anime_ace_3.ttf")
 
@@ -48,7 +54,8 @@ def build_config(target_lang):
     )
 
 
-async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality):
+async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
+                          translator, describe_backend, describe_model):
     stem = os.path.splitext(os.path.basename(volume.rstrip("/")))[0]
     pages_dir = os.path.join(work_dir, stem, "pages")
     rendered = os.path.join(work_dir, stem, "rendered")
@@ -66,9 +73,15 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality):
         out_png = os.path.join(rendered, f"{os.path.splitext(fn)[0]}.png")
         if os.path.exists(out_png):
             continue
-        ctx = await mt.translate(Image.open(os.path.join(pages_dir, fn)).convert("RGB"),
-                                 cfg, skip_context_save=True)
+        page_path = os.path.join(pages_dir, fn)
+        if describe_backend != "none":
+            translator.scene_provider = functools.partial(describe, page_path,
+                                                          describe_backend, describe_model)
+        ctx = await mt.translate(Image.open(page_path).convert("RGB"), cfg, skip_context_save=True)
         ctx.result.save(out_png)
+        if translator.last_description:
+            with open(os.path.join(rendered, f"{os.path.splitext(fn)[0]}.desc.txt"), "w") as f:
+                f.write(translator.last_description + "\n")
         print(f"[{stem}] {i}/{len(pages)}  ({len(ctx.text_regions or [])} regions)")
 
     out_pdf = os.path.join(out_dir, f"{stem}.pdf")
@@ -79,11 +92,16 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality):
 async def main(a):
     if a.model:
         os.environ["SCANLATE_CLAUDE_MODEL"] = a.model
-    mt = MangaTranslator({"use_gpu": True, "font_path": FONT, "verbose": False, "kernel_size": 3})
+    params = {"use_gpu": True, "font_path": FONT, "verbose": False, "kernel_size": 3}
+    if a.model_dir:
+        params["model_dir"] = a.model_dir
+    mt = MangaTranslator(params)
     cfg = build_config(a.target_lang)
+    translator = get_translator(Translator.claude_cli)  # shared cached instance
     os.makedirs(a.out_dir, exist_ok=True)
     for vol in a.volumes:
-        await scanlate_volume(mt, cfg, vol, a.work_dir, a.out_dir, a.quality)
+        await scanlate_volume(mt, cfg, vol, a.work_dir, a.out_dir, a.quality,
+                              translator, a.describe, a.describe_model)
 
 
 if __name__ == "__main__":
@@ -94,4 +112,8 @@ if __name__ == "__main__":
     ap.add_argument("--model", default=None, help="claude --model (default: CLI default)")
     ap.add_argument("--quality", type=int, default=55, help="JP2 quality (ImageMagick scale)")
     ap.add_argument("--work-dir", default="scanlate_work")
+    ap.add_argument("--model-dir", default=None, help="reuse an existing MIT models/ dir")
+    ap.add_argument("--describe", choices=["none", "claude", "codex", "qwen"], default="claude",
+                    help="scene-description backend fed to the translator as context")
+    ap.add_argument("--describe-model", default=None, help="model for the describe backend")
     asyncio.run(main(ap.parse_args()))

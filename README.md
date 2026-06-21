@@ -22,5 +22,9 @@ Set up the engine per upstream (venv, models). The harness additionally needs `i
 scanlate/run.py OUT/ vol1.cbz vol2.epub --target-lang ENG --quality 55
 ```
 
+Optionally a per-page **scene description** is generated and fed to the translator as context
+(`--describe claude|codex|qwen|none`, default `claude`; `codex` uses the `codex` CLI, `qwen` a
+local Ollama vision model). It is computed only for pages that have text to translate.
+
 Detection, OCR (48px), inpainting (lama_large) and English typesetting (manga2eng) are the
 upstream defaults; `run.py` wires them to the `claude_cli` translator.
