@@ -41,13 +41,13 @@ class ClaudeCliTranslator(CommonTranslator):
         super().__init__()
         self.model = os.environ.get("SCANLATE_CLAUDE_MODEL") or None
         self.timeout = int(os.environ.get("SCANLATE_CLAUDE_TIMEOUT", "240"))
-        # Optional per-page scene description: a no-arg callable the driver sets
-        # before each page. Called only here, so pages without text cost nothing.
+        # Optional per-page scene description: a no-arg callable the driver sets before
+        # each page, returning the page's scene text. Called only here, so textless
+        # pages cost nothing.
         self.scene_provider = None
         self.last_description = None
-        # Recurring-character facts. The driver seeds this per volume and the describe
-        # pass refreshes it each page (its provider returns (scene_description,
-        # updated_cast)); it primes the conversation's opening turn.
+        # Cast note seeded by the driver per volume (from the prior volume / --notes);
+        # primes the conversation's opening turn.
         self.cast_notes = None
         # One claude conversation per volume (see module docstring). The driver resets
         # this to None at each volume start; the first page mints a session id.
@@ -62,12 +62,9 @@ class ClaudeCliTranslator(CommonTranslator):
         if self.scene_provider is not None:
             provider, self.scene_provider = self.scene_provider, None
             try:
-                self.last_description, new_cast = provider()
+                self.last_description = provider()
             except Exception as e:
                 self.logger.warning(f"scene description failed: {e}")
-                new_cast = None
-            if new_cast:
-                self.cast_notes = new_cast
             if self.last_description:
                 context = ("Scene context for this page (for disambiguation — speaker gender, "
                            "who is addressed, tone):\n" + self.last_description.strip() + "\n\n")
