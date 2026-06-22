@@ -23,8 +23,9 @@ Run under MIT's venv with `img2pdf` installed and ImageMagick on PATH.
 Both scene description and translation run as one conversation per volume, seeded by
 the volume's cast note (<out_dir>/<stem>.cast.txt, or --notes / the previous volume).
 The describe conversation (default: Claude via the claude CLI; dense = local qwen3.6:27b)
-feeds each page's context to the translation conversation; at the volume's end it writes
-the completed cast note, which seeds the next volume.
+feeds each page's context to the translation conversation; it writes the completed cast
+note (unless one already exists — a pre-existing note is assumed curated and left as-is),
+which seeds the next volume.
 """
 import argparse
 import asyncio
@@ -81,11 +82,13 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
     pages = sorted(f for f in os.listdir(pages_dir) if f.lower().endswith(IMG_EXT))
     print(f"[{stem}] {len(pages)} pages")
 
-    # Cast note: the volume's own file (if present, e.g. a resume or a hand-written
-    # seed) wins over the cast inherited from the previous volume. It seeds both the
-    # describe conversation and the translation conversation's opening turn.
+    # Cast note: the volume's own file (if present, e.g. a resume or a hand-curated
+    # seed) wins over the cast inherited from the previous volume, and is then left
+    # untouched — a pre-existing note is assumed curated and never overwritten. It seeds
+    # both the describe conversation and the translation conversation's opening turn.
     cast_path = os.path.join(out_dir, f"{stem}.cast.txt")
-    seed = open(cast_path).read().strip() if os.path.exists(cast_path) else (cast_seed or "").strip()
+    cast_exists = os.path.exists(cast_path)
+    seed = open(cast_path).read().strip() if cast_exists else (cast_seed or "").strip()
     translator.start_volume(seed)   # one fresh translation conversation per volume
     describer = Describer(describe_backend, describe_model, seed) if describe_backend != "none" else None
 
@@ -101,7 +104,8 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
         if translator.last_description:
             with open(os.path.join(rendered, f"{os.path.splitext(fn)[0]}.desc.txt"), "w") as f:
                 f.write(translator.last_description + "\n")
-            if describer is not None and describer.cast:  # cast was just updated this page
+            # Persist the running cast — unless the note pre-existed (assumed hand-curated).
+            if describer is not None and describer.cast and not cast_exists:
                 with open(cast_path, "w") as f:
                     f.write(describer.cast.strip() + "\n")
         print(f"[{stem}] {i}/{len(pages)}  ({len(ctx.text_regions or [])} regions)")
