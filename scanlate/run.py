@@ -14,7 +14,7 @@ in one conversation seeded by its cast note.
 
 Run under MIT's venv with `img2pdf` installed and ImageMagick on PATH.
 
-  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--translator claude_cli|heretic] [--describe qwen|claude|codex|none] [--quality 55]
+  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--translator claude_cli|heretic] [--describe qwen|claude|codex|none] [--quality 40]
 
 Both scene description and translation run as one conversation per volume, seeded by
 the volume's cast note (<out_dir>/<stem>.cast.txt, or --notes / the previous volume).
@@ -138,7 +138,8 @@ if __name__ == "__main__":
     ap.add_argument("--translator", choices=["claude_cli", "heretic"], default="claude_cli",
                     help="translation backend (default: claude_cli; heretic = local abliterated Qwen3.6-27B)")
     ap.add_argument("--model", default=None, help="claude --model (claude_cli only; default: CLI default)")
-    ap.add_argument("--quality", type=int, default=55, help="JP2 quality (ImageMagick scale)")
+    ap.add_argument("--quality", type=int, default=40,
+                    help="JP2 quality (ImageMagick scale — near-lossless above ~50, compresses below ~40)")
     ap.add_argument("--work-dir", default="scanlate_work")
     ap.add_argument("--model-dir", default=None, help="reuse an existing MIT models/ dir")
     ap.add_argument("--describe", choices=["none", "claude", "codex", "qwen"], default="qwen",

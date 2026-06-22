@@ -27,7 +27,7 @@ installed (default) or the Ollama daemon with the Heretic model pulled (`--trans
 
 ```sh
 # one JP2 PDF per volume into OUT/, translating Chinese -> English
-scanlate/run.py OUT/ vol1.cbz vol2.epub --target-lang ENG --quality 55
+scanlate/run.py OUT/ vol1.cbz vol2.epub --target-lang ENG --quality 40
 ```
 
 A **scene description** runs as its own per-volume conversation and feeds each page's context

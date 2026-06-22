@@ -5,7 +5,11 @@ Each PNG is encoded to JP2 with ImageMagick (`-quality Q`), then embedded
 losslessly into the PDF via img2pdf (JPXDecode — no re-encoding). Requires
 `img2pdf` (pip) and ImageMagick `convert` on PATH.
 
-  to_pdf.py PNG_DIR OUT.pdf [--quality 55]
+ImageMagick's JP2 `-quality` is NOT a JPEG-style percentage: it is near-lossless
+above ~50 and only compresses meaningfully below ~40. q40 keeps text/line art
+visually intact while staying near the source size.
+
+  to_pdf.py PNG_DIR OUT.pdf [--quality 40]
 """
 import argparse
 import glob
@@ -16,7 +20,7 @@ import tempfile
 import img2pdf
 
 
-def build_pdf(png_dir, out_pdf, quality=55):
+def build_pdf(png_dir, out_pdf, quality=40):
     pngs = sorted(glob.glob(os.path.join(png_dir, "*.png")))
     if not pngs:
         raise SystemExit(f"no PNGs in {png_dir}")
@@ -36,7 +40,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("png_dir")
     ap.add_argument("out_pdf")
-    ap.add_argument("--quality", type=int, default=55)
+    ap.add_argument("--quality", type=int, default=40)
     a = ap.parse_args()
     n = build_pdf(a.png_dir, a.out_pdf, a.quality)
     print(f"{n} pages -> {a.out_pdf} ({os.path.getsize(a.out_pdf)/1e6:.1f} MB, JP2 q{a.quality})")
