@@ -49,8 +49,11 @@ ROLE = (
     "sections:\n"
     "SCENE: one short paragraph — who is present (by cast name + gender), who speaks to whom in "
     "each bubble, the emotional tone, and any key on-panel action or object the dialogue refers to.\n"
-    "CAST: the full updated roster, one per line as `Name — gender — one distinguishing detail`; "
-    "add or correct anyone this page reveals and keep the rest. Do NOT translate."
+    "CAST: the full roster, one line per character, EXACTLY `Name — gender — short physical detail` "
+    "(e.g. `Jerry — male — long blonde hair`). The detail is a FIXED physical description (hair, "
+    "build, clothing) — never a plot event, action, emotion or anything happening on this page, "
+    "never in capitals, and kept identical from page to page. Carry every existing line over "
+    "verbatim; only append a new line when a genuinely new person appears. Do NOT translate."
 )
 PAGE_ASK = "Describe this page."
 PREV_PAGE_NOTE = (
