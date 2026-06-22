@@ -93,16 +93,13 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
         if translator.last_description:
             with open(os.path.join(rendered, f"{os.path.splitext(fn)[0]}.desc.txt"), "w") as f:
                 f.write(translator.last_description + "\n")
+            if describer is not None and describer.cast:  # cast was just updated this page
+                with open(cast_path, "w") as f:
+                    f.write(describer.cast.strip() + "\n")
         print(f"[{stem}] {i}/{len(pages)}  ({len(ctx.text_regions or [])} regions)")
 
-    # Complete the volume's cast note (seeds the next volume).
-    completed = seed
-    if describer is not None:
-        completed = (describer.cast() or "").strip()
-        if completed:
-            with open(cast_path, "w") as f:
-                f.write(completed + "\n")
-            print(f"[{stem}] cast note -> {cast_path}")
+    # The cast note (seeds the next volume) was kept current page by page above.
+    completed = describer.cast if describer is not None else seed
 
     out_pdf = os.path.join(out_dir, f"{stem}.pdf")
     build_pdf(rendered, out_pdf, quality)

@@ -1,14 +1,16 @@
 """Per-volume scene description in ONE running conversation.
 
-A Describer narrates a volume's pages to give the translator context — one page per
-turn, in a single conversation — so a character's identity/gender stays consistent
-across pages instead of being re-guessed each page. It is seeded with the volume's
-cast note, and at the end emits the completed cast roster (which seeds the next
-volume). Three backends:
+A Describer narrates a volume's pages — one per turn — to give the translator
+context, and maintains a running CAST that it updates every page, so a character's
+identity/gender stays consistent and newly-introduced characters are pinned before
+their page descriptions scroll out of the window. It is seeded with the volume's cast
+note; the cast is kept current page by page and persisted as the volume's note (which
+seeds the next volume). Backends:
 
-  qwen   — local Ollama vision model (default qwen3.6:35b-a3b); history kept client-side
+  qwen   — local Ollama vision model (default qwen3.6:35b-a3b); scene history kept
+           client-side, the cast pinned in the (regenerated) system message
   claude — `claude` CLI, server-side session via --session-id/--resume
-  codex  — `codex` CLI, stateless per page (no cross-page memory)
+  codex  — `codex` CLI, stateless per page
 
 It only describes — never translates.
 """
@@ -16,6 +18,7 @@ import base64
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -28,28 +31,26 @@ OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 TIMEOUT = int(os.environ.get("SCANLATE_DESC_TIMEOUT", "300"))
 CLAUDE_BIN = shutil.which("claude") or "claude"
 # qwen runs at a fixed context; set it explicitly rather than trust Ollama's default.
-NUM_CTX = int(os.environ.get("SCANLATE_DESC_NUM_CTX", "32768"))
-# Recent page descriptions kept in the qwen conversation. The system/cast message is
-# always kept; older descriptions are dropped (identity continuity rides on the cast).
+NUM_CTX = int(os.environ.get("SCANLATE_DESC_NUM_CTX", "65536"))
+# Recent page descriptions kept in the qwen conversation (the cast is pinned separately,
+# so trimming old scenes is safe — identity rides on the always-present cast).
 KEEP_PAGES = int(os.environ.get("SCANLATE_DESC_KEEP_PAGES", "40"))
 
 ROLE = (
-    "You are describing a Hong Kong manhua page by page to give a translator context. Use the "
-    "established cast below to name characters and keep each one's gender/identity consistent — "
-    "trust the cast over a single page's ambiguous art. For each page write ONE short paragraph: "
-    "who is present (by cast name + gender), who speaks to whom in each bubble, the emotional "
-    "tone, and any key on-panel action or object the dialogue refers to. Do NOT translate."
+    "You are describing a Hong Kong manhua page by page to give a translator context. You keep a "
+    "running CAST of recurring characters and use it to keep each one's gender/identity consistent "
+    "— trust the cast over a single page's ambiguous art. For each page reply in two labelled "
+    "sections:\n"
+    "SCENE: one short paragraph — who is present (by cast name + gender), who speaks to whom in "
+    "each bubble, the emotional tone, and any key on-panel action or object the dialogue refers to.\n"
+    "CAST: the full updated roster, one per line as `Name — gender — one distinguishing detail`; "
+    "add or correct anyone this page reveals and keep the rest. Do NOT translate."
 )
 PAGE_ASK = "Describe this page."
-CAST_ASK = (
-    "Now list the full cast you established across this volume, one per line as "
-    "`Name — gender — one distinguishing detail`. Include everyone recurring; drop one-off "
-    "background figures. Output only the list."
-)
 
 
-def _cast_block(seed):
-    return "\n\nEstablished cast:\n" + (seed if seed else "(none yet — build it as you go)")
+def _cast_block(cast):
+    return "\n\nCurrent cast:\n" + (cast if cast else "(none yet — build it as you go)")
 
 
 def _b64(image_path):
@@ -62,24 +63,37 @@ def _b64(image_path):
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def _clean(s):
+    return s.strip().strip("*#").strip()
+
+
+def _scene(s):
+    return _clean(re.sub(r"(?is)^[\s>*#-]*scene\s*:", "", s.strip()))
+
+
+def _split(raw, prev_cast):
+    """Split a labelled reply into (scene, updated_cast); keep the previous cast if no CAST header."""
+    raw = (raw or "").strip()
+    m = re.search(r"(?im)^[\s>*#-]*cast\s*:", raw) or re.search(r"(?i)\bcast\s*:", raw)
+    if not m:
+        return _scene(raw), prev_cast
+    return _scene(raw[:m.start()]), (_clean(raw[m.end():]) or prev_cast)
+
+
 class Describer:
-    """One scene-description conversation for a whole volume."""
+    """One scene-description conversation for a whole volume, with a running cast."""
 
     def __init__(self, backend, model=None, cast_seed=""):
         self.backend = backend
         self.model = model
-        self.cast_seed = (cast_seed or "").strip()
-        self.history = []        # qwen: client-side message list
-        self.session_id = None   # claude: server-side session id
+        self.cast = (cast_seed or "").strip()   # running roster, updated every page
+        self.scenes = []                          # qwen: rolling scene-only history
+        self.session_id = None                    # claude: server-side session id
 
     def describe(self, image_path):
         return getattr(self, "_d_" + self.backend)(image_path)
 
-    def cast(self):
-        """The completed cast roster after the volume (seeds the next volume)."""
-        return getattr(self, "_c_" + self.backend)()
-
-    # ---- qwen: Ollama, client-side history (prior pages kept as text, current page as image) ----
+    # ---- qwen: Ollama, client-side history (scenes only); cast pinned in the system message ----
     def _ollama(self, messages):
         req = {"model": self.model or "qwen3.6:35b-a3b", "stream": False, "think": False,
                "options": {"num_ctx": NUM_CTX}, "messages": messages}
@@ -89,22 +103,15 @@ class Describer:
         return json.load(r)["message"]["content"].strip()
 
     def _d_qwen(self, image_path):
-        if not self.history:
-            self.history = [{"role": "system", "content": ROLE + _cast_block(self.cast_seed)}]
-        scene = self._ollama(self.history + [{"role": "user", "content": PAGE_ASK,
-                                              "images": [_b64(image_path)]}])
-        # Keep history text-only (drop the image), and keep only the recent window of
-        # descriptions beyond the system/cast message — old pages are safe to lose.
-        self.history += [{"role": "user", "content": PAGE_ASK},
-                         {"role": "assistant", "content": scene}]
-        if len(self.history) > 1 + 2 * KEEP_PAGES:
-            self.history = self.history[:1] + self.history[-2 * KEEP_PAGES:]
+        system = {"role": "system", "content": ROLE + _cast_block(self.cast)}
+        raw = self._ollama([system] + self.scenes
+                           + [{"role": "user", "content": PAGE_ASK, "images": [_b64(image_path)]}])
+        scene, self.cast = _split(raw, self.cast)
+        # Keep scenes only (no image, no cast) in a bounded recent window.
+        self.scenes += [{"role": "user", "content": PAGE_ASK}, {"role": "assistant", "content": scene}]
+        if len(self.scenes) > 2 * KEEP_PAGES:
+            self.scenes = self.scenes[-2 * KEEP_PAGES:]
         return scene
-
-    def _c_qwen(self):
-        if not self.history:
-            return self.cast_seed
-        return self._ollama(self.history + [{"role": "user", "content": CAST_ASK}])
 
     # ---- claude: server-side session ----
     def _claude(self, session_args, prompt):
@@ -120,18 +127,15 @@ class Describer:
     def _d_claude(self, image_path):
         if self.session_id is None:
             self.session_id = str(uuid.uuid4())
-            prompt = (ROLE + _cast_block(self.cast_seed)
-                      + f"\n\n{PAGE_ASK}\nThe page image is the file at: {image_path}")
-            return self._claude(["--session-id", self.session_id], prompt)
-        return self._claude(["--resume", self.session_id],
-                            f"Next page.\n{PAGE_ASK}\nThe image is the file at: {image_path}")
+            raw = self._claude(["--session-id", self.session_id], ROLE + _cast_block(self.cast)
+                               + f"\n\n{PAGE_ASK}\nThe page image is the file at: {image_path}")
+        else:
+            raw = self._claude(["--resume", self.session_id],
+                              f"Next page.\n{PAGE_ASK}\nThe image is the file at: {image_path}")
+        scene, self.cast = _split(raw, self.cast)
+        return scene
 
-    def _c_claude(self):
-        if self.session_id is None:
-            return self.cast_seed
-        return self._claude(["--resume", self.session_id], CAST_ASK)
-
-    # ---- codex: stateless per page (no cross-page memory) ----
+    # ---- codex: stateless per page ----
     def _d_codex(self, image_path):
         with tempfile.NamedTemporaryFile("r", suffix=".txt", delete=False) as f:
             out = f.name
@@ -139,11 +143,10 @@ class Describer:
             cmd = ["codex", "exec", "-i", image_path, "-o", out]
             if self.model:
                 cmd += ["-m", self.model]
-            cmd += [ROLE + _cast_block(self.cast_seed) + "\n\n" + PAGE_ASK]
+            cmd += [ROLE + _cast_block(self.cast) + "\n\n" + PAGE_ASK]
             subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
-            return open(out).read().strip()
+            raw = open(out).read().strip()
         finally:
             os.path.exists(out) and os.unlink(out)
-
-    def _c_codex(self):
-        return self.cast_seed
+        scene, self.cast = _split(raw, self.cast)
+        return scene
