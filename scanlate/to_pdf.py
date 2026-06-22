@@ -10,8 +10,8 @@ above ~50 and only compresses meaningfully below ~40. q40 keeps text/line art
 visually intact while staying near the source size.
 
 With `originals_dir`, every page but the cover is paired side by side — the
-original page on the left, the scanlated page on the right — so a reader can
-check the translation against the source.
+original page on the left, the scanlated page on the right, split by a 2px
+black rule — so a reader can check the translation against the source.
 
   to_pdf.py PNG_DIR OUT.pdf [--quality 40] [--originals ORIG_DIR]
 """
@@ -30,13 +30,14 @@ def _original_for(originals_dir, png):
 
 
 def _encode(scanlated, original, out_jp2, quality):
-    """Encode one PDF page to JP2: the scanlated page alone, or original|scanlated."""
+    """Encode one PDF page to JP2: the scanlated page alone, or original | 2px rule | scanlated."""
     if original is None:
         cmd = ["convert", scanlated]
     else:
         h = subprocess.run(["identify", "-format", "%h", scanlated],
                            capture_output=True, text=True, check=True).stdout.strip()
-        cmd = ["convert", "(", original, "-resize", "x" + h, ")", scanlated, "+append"]
+        cmd = ["convert", "(", original, "-resize", "x" + h, ")",
+               "(", "-size", "2x" + h, "xc:black", ")", scanlated, "+append"]
     subprocess.run(cmd + ["-quality", str(quality), out_jp2], check=True)
 
 
