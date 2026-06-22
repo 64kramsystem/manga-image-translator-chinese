@@ -7,10 +7,16 @@ their page descriptions scroll out of the window. It is seeded with the volume's
 note; the cast is kept current page by page and persisted as the volume's note (which
 seeds the next volume). Backends:
 
-  qwen   — local Ollama vision model (default qwen3.6:35b-a3b); scene history kept
-           client-side, the cast pinned in the (regenerated) system message
+  qwen   — local Ollama vision model (default dense qwen3.6:27b — it reliably holds the seeded
+           cast across pages, where the faster 35b-a3b MoE drops absent characters; see the
+           scanlator-64k FINDINGS doc); scene history kept client-side (text only), the cast
+           pinned in the system message
   claude — `claude` CLI, server-side session via --session-id/--resume
   codex  — `codex` CLI, stateless per page
+
+The previous page's image is also passed (where the backend doesn't already retain it) so
+characters whose art is ambiguous on a page can be matched visually against the page before —
+qwen and codex get it explicitly; claude's resumed session already carries prior page images.
 
 It only describes — never translates.
 """
@@ -47,6 +53,11 @@ ROLE = (
     "add or correct anyone this page reveals and keep the rest. Do NOT translate."
 )
 PAGE_ASK = "Describe this page."
+PREV_PAGE_NOTE = (
+    "The FIRST image is the previous page, included only so you can keep each character's "
+    "appearance consistent across pages — do not describe it. The SECOND image is the page to "
+    "describe.\n"
+)
 
 
 def _cast_block(cast):
@@ -89,13 +100,16 @@ class Describer:
         self.cast = (cast_seed or "").strip()   # running roster, updated every page
         self.scenes = []                          # qwen: rolling scene-only history
         self.session_id = None                    # claude: server-side session id
+        self.prev_path = None                     # previous page's image, for visual continuity
 
     def describe(self, image_path):
-        return getattr(self, "_d_" + self.backend)(image_path)
+        scene = getattr(self, "_d_" + self.backend)(image_path)
+        self.prev_path = image_path
+        return scene
 
     # ---- qwen: Ollama, client-side history (scenes only); cast pinned in the system message ----
     def _ollama(self, messages):
-        req = {"model": self.model or "qwen3.6:35b-a3b", "stream": False, "think": False,
+        req = {"model": self.model or "qwen3.6:27b", "stream": False, "think": False,
                "options": {"num_ctx": NUM_CTX}, "messages": messages}
         r = urllib.request.urlopen(urllib.request.Request(
             OLLAMA + "/api/chat", data=json.dumps(req).encode(),
@@ -104,8 +118,12 @@ class Describer:
 
     def _d_qwen(self, image_path):
         system = {"role": "system", "content": ROLE + _cast_block(self.cast)}
-        raw = self._ollama([system] + self.scenes
-                           + [{"role": "user", "content": PAGE_ASK, "images": [_b64(image_path)]}])
+        if self.prev_path:
+            user = {"role": "user", "content": PREV_PAGE_NOTE + PAGE_ASK,
+                    "images": [_b64(self.prev_path), _b64(image_path)]}
+        else:
+            user = {"role": "user", "content": PAGE_ASK, "images": [_b64(image_path)]}
+        raw = self._ollama([system] + self.scenes + [user])
         scene, self.cast = _split(raw, self.cast)
         # Keep scenes only (no image, no cast) in a bounded recent window.
         self.scenes += [{"role": "user", "content": PAGE_ASK}, {"role": "assistant", "content": scene}]
@@ -140,10 +158,12 @@ class Describer:
         with tempfile.NamedTemporaryFile("r", suffix=".txt", delete=False) as f:
             out = f.name
         try:
-            cmd = ["codex", "exec", "-i", image_path, "-o", out]
+            imgs = ["-i", self.prev_path, "-i", image_path] if self.prev_path else ["-i", image_path]
+            note = PREV_PAGE_NOTE if self.prev_path else ""
+            cmd = ["codex", "exec"] + imgs + ["-o", out]
             if self.model:
                 cmd += ["-m", self.model]
-            cmd += [ROLE + _cast_block(self.cast) + "\n\n" + PAGE_ASK]
+            cmd += [ROLE + _cast_block(self.cast) + "\n\n" + note + PAGE_ASK]
             subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
             raw = open(out).read().strip()
         finally:
