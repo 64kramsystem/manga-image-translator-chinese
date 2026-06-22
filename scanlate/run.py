@@ -7,6 +7,10 @@ in reading order, runs the MIT pipeline (detection -> OCR -> translation -> inpa
 -> manga2eng render), and assembles a JP2 PDF. Pages whose rendered output already
 exists are skipped, so an interrupted run resumes cheaply.
 
+By default every page but the cover is paired side by side — the original on the
+left, the scanlated page on the right — so the translation can be read against the
+source; -o/--skip-original emits just the scanlated pages.
+
 The translation stage is pluggable via --translator: `claude_cli` (default, the Claude
 subscription via the `claude` CLI — highest quality) or `heretic` (local abliterated
 Qwen3.6-27B via Ollama — free, offline and uncensored). Both translate a whole volume
@@ -14,7 +18,7 @@ in one conversation seeded by its cast note.
 
 Run under MIT's venv with `img2pdf` installed and ImageMagick on PATH.
 
-  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--translator claude_cli|heretic] [--describe qwen|claude|codex|none] [--quality 40]
+  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--translator claude_cli|heretic] [--describe qwen|claude|codex|none] [--quality 40] [-o]
 
 Both scene description and translation run as one conversation per volume, seeded by
 the volume's cast note (<out_dir>/<stem>.cast.txt, or --notes / the previous volume).
@@ -62,7 +66,7 @@ def build_config(target_lang, translator):
 
 
 async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
-                          translator, describe_backend, describe_model, cast_seed):
+                          translator, describe_backend, describe_model, cast_seed, skip_original):
     stem = os.path.splitext(os.path.basename(volume.rstrip("/")))[0]
     pages_dir = os.path.join(work_dir, stem, "pages")
     rendered = os.path.join(work_dir, stem, "rendered")
@@ -106,7 +110,7 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
     completed = describer.cast if describer is not None else seed
 
     out_pdf = os.path.join(out_dir, f"{stem}.pdf")
-    build_pdf(rendered, out_pdf, quality)
+    build_pdf(rendered, out_pdf, quality, originals_dir=(None if skip_original else pages_dir))
     print(f"[{stem}] -> {out_pdf}")
     return completed
 
@@ -127,7 +131,8 @@ async def main(a):
     for vol in a.volumes:
         # Each volume's completed cast note seeds the next.
         cast_seed = await scanlate_volume(mt, cfg, vol, a.work_dir, a.out_dir, a.quality,
-                                          translator, a.describe, describe_model, cast_seed) or cast_seed
+                                          translator, a.describe, describe_model, cast_seed,
+                                          a.skip_original) or cast_seed
 
 
 if __name__ == "__main__":
@@ -140,6 +145,8 @@ if __name__ == "__main__":
     ap.add_argument("--model", default=None, help="claude --model (claude_cli only; default: CLI default)")
     ap.add_argument("--quality", type=int, default=40,
                     help="JP2 quality (ImageMagick scale — near-lossless above ~50, compresses below ~40)")
+    ap.add_argument("-o", "--skip-original", action="store_true",
+                    help="emit only the scanlated page; default pairs each page beside its original (cover excepted)")
     ap.add_argument("--work-dir", default="scanlate_work")
     ap.add_argument("--model-dir", default=None, help="reuse an existing MIT models/ dir")
     ap.add_argument("--describe", choices=["none", "claude", "codex", "qwen"], default="qwen",

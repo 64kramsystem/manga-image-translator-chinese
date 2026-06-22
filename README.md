@@ -15,7 +15,9 @@ end-to-end comic scanlation, adding:
     silently softened. Override with `SCANLATE_HERETIC_MODEL` / `SCANLATE_HERETIC_NUM_CTX`.
 - **`scanlate/` harness** — batch-translates `.cbz`/`.epub` volumes (or image folders) and emits
   one **JPEG2000 PDF** per volume, resuming where it left off. Pick the translator with
-  `--translator claude_cli|heretic`.
+  `--translator claude_cli|heretic`. By default every page but the cover is paired side by side —
+  original on the left, scanlation on the right — so the translation reads against the source;
+  `-o`/`--skip-original` emits just the scanlated pages.
 
 The translation engine, models, and all other options are upstream's; see the upstream README.
 
