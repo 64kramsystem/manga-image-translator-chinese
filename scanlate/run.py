@@ -18,13 +18,13 @@ in one conversation seeded by its cast note.
 
 Run under MIT's venv with `img2pdf` installed and ImageMagick on PATH.
 
-  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--translator claude_cli|heretic] [--describe qwen|claude|codex|none] [--quality 40] [-o]
+  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--translator claude_cli|heretic] [--describe claude|dense|none] [--quality 40] [-o]
 
 Both scene description and translation run as one conversation per volume, seeded by
 the volume's cast note (<out_dir>/<stem>.cast.txt, or --notes / the previous volume).
-The describe conversation (default: local dense qwen) feeds each page's context to the
-translation conversation; at the volume's end it writes the completed cast note, which
-seeds the next volume.
+The describe conversation (default: Claude via the claude CLI; dense = local qwen3.6:27b)
+feeds each page's context to the translation conversation; at the volume's end it writes
+the completed cast note, which seeds the next volume.
 """
 import argparse
 import asyncio
@@ -126,7 +126,7 @@ async def main(a):
     cfg = build_config(a.target_lang, tkey)
     translator = get_translator(tkey)  # shared cached instance
     cast_seed = open(a.notes).read() if a.notes else ""
-    describe_model = a.describe_model or ("qwen3.6:27b" if a.describe == "qwen" else None)
+    describe_model = a.describe_model or ("qwen3.6:27b" if a.describe == "dense" else None)
     os.makedirs(a.out_dir, exist_ok=True)
     for vol in a.volumes:
         # Each volume's completed cast note seeds the next.
@@ -149,8 +149,9 @@ if __name__ == "__main__":
                     help="emit only the scanlated page; default pairs each page beside its original (cover excepted)")
     ap.add_argument("--work-dir", default="scanlate_work")
     ap.add_argument("--model-dir", default=None, help="reuse an existing MIT models/ dir")
-    ap.add_argument("--describe", choices=["none", "claude", "codex", "qwen"], default="qwen",
-                    help="scene-description backend fed to the translator as context (default: qwen MoE)")
+    ap.add_argument("--describe", choices=["none", "claude", "dense"], default="claude",
+                    help="scene-description backend fed to the translator as context "
+                         "(default: claude; dense = local qwen3.6:27b Q4, greedy)")
     ap.add_argument("--describe-model", default=None, help="model for the describe backend")
     ap.add_argument("--notes", default=None,
                     help="seed file of recurring-character facts; the describe pass extends it per page")

@@ -7,16 +7,15 @@ their page descriptions scroll out of the window. It is seeded with the volume's
 note; the cast is kept current page by page and persisted as the volume's note (which
 seeds the next volume). Backends:
 
-  qwen   — local Ollama vision model (default dense qwen3.6:27b — it reliably holds the seeded
-           cast across pages, where the faster 35b-a3b MoE drops absent characters; see the
-           scanlator-64k FINDINGS doc); scene history kept client-side (text only), the cast
-           pinned in the system message
-  claude — `claude` CLI, server-side session via --session-id/--resume
-  codex  — `codex` CLI, stateless per page
+  claude — `claude` CLI, server-side session via --session-id/--resume (default — best at
+           identity/continuity; see the scanlator-64k FINDINGS describe benchmark)
+  dense  — local Ollama vision model qwen3.6:27b (Q4_K_M), greedy (temperature 0, the proven
+           drift-free setting); scene history kept client-side (text only), the cast pinned in
+           the system message
 
 The previous page's image is also passed (where the backend doesn't already retain it) so
 characters whose art is ambiguous on a page can be matched visually against the page before —
-qwen and codex get it explicitly; claude's resumed session already carries prior page images.
+dense gets it explicitly; claude's resumed session already carries prior page images.
 
 It only describes — never translates.
 """
@@ -27,7 +26,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import urllib.request
 import uuid
 
@@ -110,16 +108,16 @@ class Describer:
         self.prev_path = image_path
         return scene
 
-    # ---- qwen: Ollama, client-side history (scenes only); cast pinned in the system message ----
+    # ---- dense: Ollama, client-side history (scenes only); cast pinned in the system message ----
     def _ollama(self, messages):
         req = {"model": self.model or "qwen3.6:27b", "stream": False, "think": False,
-               "options": {"num_ctx": NUM_CTX}, "messages": messages}
+               "options": {"num_ctx": NUM_CTX, "temperature": 0}, "messages": messages}
         r = urllib.request.urlopen(urllib.request.Request(
             OLLAMA + "/api/chat", data=json.dumps(req).encode(),
             headers={"Content-Type": "application/json"}), timeout=600)
         return json.load(r)["message"]["content"].strip()
 
-    def _d_qwen(self, image_path):
+    def _d_dense(self, image_path):
         system = {"role": "system", "content": ROLE + _cast_block(self.cast)}
         if self.prev_path:
             user = {"role": "user", "content": PREV_PAGE_NOTE + PAGE_ASK,
@@ -153,23 +151,5 @@ class Describer:
         else:
             raw = self._claude(["--resume", self.session_id],
                               f"Next page.\n{PAGE_ASK}\nThe image is the file at: {image_path}")
-        scene, self.cast = _split(raw, self.cast)
-        return scene
-
-    # ---- codex: stateless per page ----
-    def _d_codex(self, image_path):
-        with tempfile.NamedTemporaryFile("r", suffix=".txt", delete=False) as f:
-            out = f.name
-        try:
-            imgs = ["-i", self.prev_path, "-i", image_path] if self.prev_path else ["-i", image_path]
-            note = PREV_PAGE_NOTE if self.prev_path else ""
-            cmd = ["codex", "exec"] + imgs + ["-o", out]
-            if self.model:
-                cmd += ["-m", self.model]
-            cmd += [ROLE + _cast_block(self.cast) + "\n\n" + note + PAGE_ASK]
-            subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
-            raw = open(out).read().strip()
-        finally:
-            os.path.exists(out) and os.unlink(out)
         scene, self.cast = _split(raw, self.cast)
         return scene
