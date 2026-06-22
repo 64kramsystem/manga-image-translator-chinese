@@ -49,8 +49,13 @@ class ClaudeCliTranslator(CommonTranslator):
         # Cast note seeded by the driver per volume (from the prior volume / --notes);
         # primes the conversation's opening turn.
         self.cast_notes = None
-        # One claude conversation per volume (see module docstring). The driver resets
-        # this to None at each volume start; the first page mints a session id.
+        # One claude conversation per volume (see module docstring). start_volume()
+        # clears this at each volume start; the first page mints a session id.
+        self.session_id = None
+
+    def start_volume(self, cast_notes):
+        """Reset the per-volume conversation and seed its cast note."""
+        self.cast_notes = (cast_notes or "").strip() or None
         self.session_id = None
 
     async def _translate(self, from_lang: str, to_lang: str, queries: List[str]) -> List[str]:

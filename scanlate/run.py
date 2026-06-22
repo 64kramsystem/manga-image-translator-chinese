@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""Batch scanlation: translate comic volumes end to end with the claude_cli
-translator, emitting one JPEG2000 PDF per volume.
+"""Batch scanlation: translate comic volumes end to end, emitting one JPEG2000 PDF
+per volume.
 
 For each input (a .cbz/.epub file or a folder of page images) it: extracts pages
-in reading order, runs the MIT pipeline (detection -> OCR -> claude_cli
-translation -> inpaint -> manga2eng render), and assembles a JP2 PDF. Pages whose
-rendered output already exists are skipped, so an interrupted run resumes cheaply.
+in reading order, runs the MIT pipeline (detection -> OCR -> translation -> inpaint
+-> manga2eng render), and assembles a JP2 PDF. Pages whose rendered output already
+exists are skipped, so an interrupted run resumes cheaply.
+
+The translation stage is pluggable via --translator: `claude_cli` (default, the Claude
+subscription via the `claude` CLI — highest quality) or `heretic` (local abliterated
+Qwen3.6-27B via Ollama — free, offline and uncensored). Both translate a whole volume
+in one conversation seeded by its cast note.
 
 Run under MIT's venv with `img2pdf` installed and ImageMagick on PATH.
 
-  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--describe claude|codex|qwen|none] [--quality 55]
+  scanlate/run.py OUT_DIR VOLUME [VOLUME ...] [--translator claude_cli|heretic] [--describe qwen|claude|codex|none] [--quality 55]
 
 Both scene description and translation run as one conversation per volume, seeded by
 the volume's cast note (<out_dir>/<stem>.cast.txt, or --notes / the previous volume).
-The describe conversation (default: local MoE qwen) feeds each page's context to the
+The describe conversation (default: local dense qwen) feeds each page's context to the
 translation conversation; at the volume's end it writes the completed cast note, which
 seeds the next volume.
 """
@@ -42,10 +47,10 @@ from describe import Describer  # noqa: E402
 FONT = os.path.join(REPO, "fonts", "anime_ace_3.ttf")
 
 
-def build_config(target_lang):
+def build_config(target_lang, translator):
     return Config(
         translator=TranslatorConfig(
-            translator=Translator.claude_cli,
+            translator=translator,
             target_lang=target_lang,
             enable_post_translation_check=False,
         ),
@@ -77,8 +82,7 @@ async def scanlate_volume(mt, cfg, volume, work_dir, out_dir, quality,
     # describe conversation and the translation conversation's opening turn.
     cast_path = os.path.join(out_dir, f"{stem}.cast.txt")
     seed = open(cast_path).read().strip() if os.path.exists(cast_path) else (cast_seed or "").strip()
-    translator.cast_notes = seed or None
-    translator.session_id = None   # one fresh translation conversation per volume
+    translator.start_volume(seed)   # one fresh translation conversation per volume
     describer = Describer(describe_backend, describe_model, seed) if describe_backend != "none" else None
 
     for i, fn in enumerate(pages, 1):
@@ -114,10 +118,11 @@ async def main(a):
     if a.model_dir:
         params["model_dir"] = a.model_dir
     mt = MangaTranslator(params)
-    cfg = build_config(a.target_lang)
-    translator = get_translator(Translator.claude_cli)  # shared cached instance
+    tkey = Translator(a.translator)
+    cfg = build_config(a.target_lang, tkey)
+    translator = get_translator(tkey)  # shared cached instance
     cast_seed = open(a.notes).read() if a.notes else ""
-    describe_model = a.describe_model or ("qwen3.6:35b-a3b" if a.describe == "qwen" else None)
+    describe_model = a.describe_model or ("qwen3.6:27b" if a.describe == "qwen" else None)
     os.makedirs(a.out_dir, exist_ok=True)
     for vol in a.volumes:
         # Each volume's completed cast note seeds the next.
@@ -130,7 +135,9 @@ if __name__ == "__main__":
     ap.add_argument("out_dir")
     ap.add_argument("volumes", nargs="+", help=".cbz/.epub files or page-image folders")
     ap.add_argument("--target-lang", default="ENG")
-    ap.add_argument("--model", default=None, help="claude --model (default: CLI default)")
+    ap.add_argument("--translator", choices=["claude_cli", "heretic"], default="claude_cli",
+                    help="translation backend (default: claude_cli; heretic = local abliterated Qwen3.6-27B)")
+    ap.add_argument("--model", default=None, help="claude --model (claude_cli only; default: CLI default)")
     ap.add_argument("--quality", type=int, default=55, help="JP2 quality (ImageMagick scale)")
     ap.add_argument("--work-dir", default="scanlate_work")
     ap.add_argument("--model-dir", default=None, help="reuse an existing MIT models/ dir")
