@@ -29,7 +29,7 @@ def _original_for(originals_dir, png):
     return next(iter(glob.glob(os.path.join(originals_dir, stem + ".*"))), None)
 
 
-def _encode(scanlated, original, out_jp2, quality):
+def _encode(scanlated, original, out_jp2, quality, target_h=None):
     """Encode one PDF page to JP2: the scanlated page alone, or original | 2px rule | scanlated."""
     if original is None:
         cmd = ["convert", scanlated]
@@ -38,6 +38,10 @@ def _encode(scanlated, original, out_jp2, quality):
                            capture_output=True, text=True, check=True).stdout.strip()
         cmd = ["convert", "(", original, "-resize", "x" + h, ")",
                "(", "-size", "2x" + h, "xc:black", ")", scanlated, "+append"]
+    if target_h is not None:
+        # Pad to target_h so all paired pages have the same canvas height. PDF viewers
+        # that ignore per-page MediaBox (common on iOS) otherwise misdisplay shorter pages.
+        cmd += ["-background", "white", "-gravity", "Center", "-extent", f"x{target_h}"]
     subprocess.run(cmd + ["-quality", str(quality), out_jp2], check=True)
 
 
@@ -45,13 +49,20 @@ def build_pdf(png_dir, out_pdf, quality=40, originals_dir=None):
     pngs = sorted(glob.glob(os.path.join(png_dir, "*.png")))
     if not pngs:
         raise SystemExit(f"no PNGs in {png_dir}")
+    # Normalise all non-cover pages to the tallest page height so the PDF has a consistent
+    # MediaBox; skip the cover (i == 0) so it stays landscape.
+    non_cover = pngs[1:]
+    target_h = (max(int(subprocess.run(["identify", "-format", "%h", p],
+                                       capture_output=True, text=True, check=True).stdout.strip())
+                    for p in non_cover)
+                if non_cover else None)
     with tempfile.TemporaryDirectory() as tmp:
         jp2s = []
         for i, png in enumerate(pngs):
             jp2 = os.path.join(tmp, os.path.splitext(os.path.basename(png))[0] + ".jp2")
             # i == 0 is the cover: kept as a single page even when pairing is on.
             original = _original_for(originals_dir, png) if originals_dir and i > 0 else None
-            _encode(png, original, jp2, quality)
+            _encode(png, original, jp2, quality, target_h=(None if i == 0 else target_h))
             jp2s.append(jp2)
         os.makedirs(os.path.dirname(os.path.abspath(out_pdf)), exist_ok=True)
         with open(out_pdf, "wb") as f:
